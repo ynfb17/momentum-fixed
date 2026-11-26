@@ -1,0 +1,236 @@
+/**
+ * UI修复和改进测试套件
+ * 验证横向滚动修复、性能优化等功能
+ */
+
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { RuleManagerView } from '../components/rule-manager/RuleManagerViewContainer';
+import { RuleSelectionDialog } from '../components/RuleSelectionDialog';
+import { ResponsiveContainer } from '../components/ResponsiveContainer';
+import { performanceMonitor } from '../utils/performance-monitor/PerformanceMonitor';
+import { I18nProvider } from '../i18n';
+import { exceptionRuleManager } from '../services/exception-rule-manager/ExceptionRuleManager';
+import { ExceptionRuleType, type ExceptionRule } from '../types';
+import type { Mocked } from 'vitest';
+import { cssValue } from '../test/utils/cssValue';
+
+// Mock dependencies
+vi.mock('../services/exception-rule-manager/ExceptionRuleManager', () => ({
+  exceptionRuleManager: {
+    getAllRules: vi.fn(),
+    createChainRule: vi.fn(),
+  },
+}));
+
+const renderWithI18n = (ui: React.ReactElement) => {
+  return render(ui, { wrapper: I18nProvider });
+};
+
+const mockedRuleManager = exceptionRuleManager as Mocked<
+  typeof exceptionRuleManager
+>;
+
+const mockRules: ExceptionRule[] = [
+  {
+    id: '1',
+    name: '上厕所',
+    chainId: 'test-chain',
+    scope: 'chain',
+    type: ExceptionRuleType.PAUSE_ONLY,
+    createdAt: new Date(),
+    usageCount: 1,
+    isActive: true,
+  },
+];
+
+describe('UI Fixes and Improvements', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.setItem('language', 'zh');
+    mockedRuleManager.getAllRules.mockResolvedValue(mockRules);
+
+    performanceMonitor.setBackgroundMode(false);
+    performanceMonitor.setReportingEnabled(false);
+  });
+
+  describe('Horizontal Scroll Fixes', () => {
+    test('ExceptionRuleManager should not cause horizontal overflow', async () => {
+      const { container } = renderWithI18n(
+        <RuleManagerView onClose={() => {}} />,
+      );
+
+      await screen.findByText('例外规则管理');
+
+      const overlay = container.querySelector('div.fixed.inset-0');
+      expect(overlay).toHaveClass('overflow-x-hidden');
+    });
+
+    test('RuleSelectionDialog should prevent horizontal overflow', () => {
+      const mockSessionContext = {
+        sessionId: 'test-session',
+        chainId: 'test-chain',
+        chainName: 'Test Chain',
+        startedAt: new Date(),
+        elapsedTime: 300,
+        remainingTime: 600,
+        isDurationless: false,
+      };
+
+      const { container } = renderWithI18n(
+        <RuleSelectionDialog
+          isOpen={true}
+          actionType="pause"
+          sessionContext={mockSessionContext}
+          onRuleSelected={() => {}}
+          onCreateNewRule={() => {}}
+          onCancel={() => {}}
+        />,
+      );
+
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).toHaveClass('overflow-hidden');
+      expect(dialog.style.maxWidth).toBe(
+        cssValue('max-width', 'min(640px, 100vw - 2rem)'),
+      );
+    });
+
+    test('ResponsiveContainer should use a stable width mapping', () => {
+      const { container } = render(
+        <ResponsiveContainer maxWidth="2xl">
+          <div style={{ width: '2000px' }}>Wide content</div>
+        </ResponsiveContainer>,
+      );
+
+      const containerElement = container.firstChild as HTMLElement;
+      expect(containerElement).toHaveClass('max-w-2xl', 'w-full');
+      expect(containerElement).not.toHaveAttribute('style');
+    });
+  });
+
+  describe('Performance Optimizations', () => {
+    test('Performance monitor should work in background mode', () => {
+      performanceMonitor.setReportingEnabled(true);
+      performanceMonitor.setBackgroundMode(true);
+
+      // Simulate a slow operation
+      const result = performanceMonitor.measureInteraction(
+        'test-interaction',
+        () => {
+          // Simulate work
+          const start = Date.now();
+          while (Date.now() - start < 50) {
+            // Busy wait
+          }
+          return 'result';
+        },
+      );
+
+      expect(result).toBe('result');
+
+      const report = performanceMonitor.reportMetrics();
+      expect(report.interactionTime).toBeGreaterThan(0);
+
+      // Restore defaults to avoid leaking state across tests.
+      performanceMonitor.setReportingEnabled(false);
+      performanceMonitor.setBackgroundMode(false);
+    });
+  });
+
+  describe('Responsive Design', () => {
+    test('ResponsiveContainer should adapt to different screen sizes', () => {
+      const { rerender } = render(
+        <ResponsiveContainer maxWidth="2xl">
+          <div>Content</div>
+        </ResponsiveContainer>,
+      );
+
+      // Test different max widths
+      rerender(
+        <ResponsiveContainer maxWidth="4xl">
+          <div>Content</div>
+        </ResponsiveContainer>,
+      );
+
+      expect(screen.getByText('Content').parentElement).toHaveClass(
+        'max-w-4xl',
+      );
+      expect(screen.getByText('Content')).toBeInTheDocument();
+    });
+
+    test('RuleManagerView constrains its panel width to the viewport', async () => {
+      const { container } = renderWithI18n(
+        <RuleManagerView onClose={() => {}} />,
+      );
+      await screen.findByText('例外规则管理');
+
+      const modal = container.querySelector('div[style*="100vw"]');
+      expect((modal as HTMLElement).style.maxWidth).toBe(
+        cssValue('max-width', 'min(1152px, 100vw - 2rem)'),
+      );
+    });
+  });
+});
+
+// Integration tests
+describe('UI Integration Tests', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.setItem('language', 'zh');
+    mockedRuleManager.getAllRules.mockResolvedValue(mockRules);
+    performanceMonitor.setReportingEnabled(false);
+    performanceMonitor.setBackgroundMode(false);
+  });
+
+  test('opens the create-rule form while preserving overflow containment', async () => {
+    const onClose = vi.fn();
+
+    const { container } = renderWithI18n(<RuleManagerView onClose={onClose} />);
+    await screen.findByText('例外规则管理');
+
+    fireEvent.click(screen.getByRole('button', { name: '创建规则' }));
+
+    expect(
+      await screen.findByRole('heading', { name: '创建新规则' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText('例如：上厕所、喝水、接电话'),
+    ).toBeInTheDocument();
+
+    const overlay = container.querySelector('div.fixed.inset-0');
+    expect(overlay).toHaveClass('overflow-x-hidden');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test('invokes cancel without selecting a rule when the dialog closes', () => {
+    const mockSessionContext = {
+      sessionId: 'test-session',
+      chainId: 'test-chain',
+      chainName: 'Test Chain',
+      startedAt: new Date(),
+      elapsedTime: 300,
+      remainingTime: 600,
+      isDurationless: false,
+    };
+
+    const onRuleSelected = vi.fn();
+    const onCancel = vi.fn();
+
+    renderWithI18n(
+      <RuleSelectionDialog
+        isOpen={true}
+        actionType="pause"
+        sessionContext={mockSessionContext}
+        onRuleSelected={onRuleSelected}
+        onCreateNewRule={() => {}}
+        onCancel={onCancel}
+      />,
+    );
+
+    const cancelButton = screen.getByLabelText('关闭对话框');
+    fireEvent.click(cancelButton);
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onRuleSelected).not.toHaveBeenCalled();
+  });
+});

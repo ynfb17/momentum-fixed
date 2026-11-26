@@ -1,0 +1,109 @@
+import { type Translator } from '../../../i18n';
+import type { AppState } from '../../../types';
+import {
+  incrementGroupCompletionCount,
+  isGroupFullyCompleted,
+} from '../../../utils/chain-tree';
+import { forwardTimerManager } from '../../../utils/forward-timer';
+import { logger } from '../../../utils/logger';
+import { buildChainTree } from '../../../utils/chain-tree';
+import { notifyTaskCompleted } from './sessionNotifications';
+
+type Chain = AppState['chains'][number];
+type ActiveSession = NonNullable<AppState['activeSession']>;
+
+export function computeActualDuration(
+  activeSession: ActiveSession,
+  chain: Chain,
+): number {
+  if (!chain.isDurationless) return activeSession.duration;
+
+  const sessionId = `${activeSession.chainId}_${activeSession.startedAt.getTime()}`;
+  const elapsedSeconds = forwardTimerManager.getCurrentElapsed(sessionId);
+  return Math.ceil(elapsedSeconds / 60);
+}
+
+export function updateChainsForSuccess(
+  chains: AppState['chains'],
+  chainId: string,
+  completedAt: Date,
+): AppState['chains'] {
+  return chains.map((chain) =>
+    chain.id === chainId
+      ? {
+          ...chain,
+          currentStreak: chain.currentStreak + 1,
+          totalCompletions: chain.totalCompletions + 1,
+          lastCompletedAt: completedAt,
+        }
+      : chain,
+  );
+}
+
+export function updateChainsForFailure(
+  chains: AppState['chains'],
+  chainId: string,
+): AppState['chains'] {
+  return chains.map((chain) =>
+    chain.id === chainId
+      ? {
+          ...chain,
+          currentStreak: 0,
+          totalFailures: chain.totalFailures + 1,
+        }
+      : chain,
+  );
+}
+
+interface GroupCycleIncrementResult {
+  updatedChains: AppState['chains'];
+  completedGroupId?: string;
+}
+
+export function maybeIncrementGroupCycleCompletion(
+  chains: AppState['chains'],
+  completedChain: Chain,
+  t: Translator,
+  notify = true,
+): GroupCycleIncrementResult {
+  if (!completedChain.parentId || completedChain.type === 'group') {
+    return { updatedChains: chains };
+  }
+
+  const chainTree = buildChainTree(chains);
+  const groupNode = chainTree.find(
+    (node) => node.id === completedChain.parentId,
+  );
+  if (
+    !groupNode ||
+    groupNode.type !== 'group' ||
+    !isGroupFullyCompleted(groupNode)
+  ) {
+    return { updatedChains: chains };
+  }
+
+  logger.debug(
+    'SESSIONS',
+    `任务群 ${groupNode.name} 已完成所有任务，增加完成计数`,
+  );
+  const updatedChains = incrementGroupCompletionCount(
+    chains,
+    completedChain.parentId,
+  );
+  const parentChain = updatedChains.find(
+    (chain) => chain.id === completedChain.parentId,
+  );
+
+  if (parentChain && notify) {
+    notifyTaskCompleted(
+      parentChain.name,
+      parentChain.currentStreak,
+      t('sessions.completion.groupCompletedACycle'),
+    );
+  }
+
+  return {
+    updatedChains,
+    completedGroupId: completedChain.parentId,
+  };
+}

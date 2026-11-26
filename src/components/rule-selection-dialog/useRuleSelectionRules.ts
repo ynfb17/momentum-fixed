@@ -1,0 +1,115 @@
+import { type Translator } from '../../i18n';
+import { useCallback, useState } from 'react';
+import type { ExceptionRule } from '../../types';
+import { ExceptionRuleType } from '../../types';
+import { exceptionRuleManager } from '../../services/exception-rule-manager/ExceptionRuleManager';
+import {
+  getSafeErrorDetailFromUnknown,
+  toError,
+} from '../../utils/errorMessage';
+import { logger } from '../../utils/logger';
+import type { Language } from '../../i18n';
+
+export type RuleActionType = 'pause' | 'early_completion';
+
+export function useRuleSelectionRules(params: {
+  chainId: string;
+  actionType: RuleActionType;
+  language: Language;
+  t: Translator;
+}) {
+  const { actionType, chainId, language, t } = params;
+  const [rules, setRules] = useState<ExceptionRule[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const ruleType =
+    actionType === 'pause'
+      ? ExceptionRuleType.PAUSE_ONLY
+      : ExceptionRuleType.EARLY_COMPLETION_ONLY;
+  const isAvailableToChain = useCallback(
+    (rule: ExceptionRule) =>
+      rule.isActive && (rule.scope === 'global' || rule.chainId === chainId),
+    [chainId],
+  );
+
+  const createDefaultRules = useCallback(async () => {
+    const names =
+      actionType === 'pause'
+        ? ['Bathroom break', 'Phone call']
+        : ['Reached goal early'];
+    const allRules = await exceptionRuleManager.getAllRules();
+    const chainRules = allRules.filter(
+      (rule) => rule.chainId === chainId && rule.scope === 'chain',
+    );
+    const created: ExceptionRule[] = [];
+    for (const name of names) {
+      try {
+        const existing = chainRules.find(
+          (rule) => rule.isActive && rule.name === name,
+        );
+        created.push(
+          existing ??
+            (
+              await exceptionRuleManager.createChainRule(
+                chainId,
+                name,
+                ruleType,
+              )
+            ).rule,
+        );
+      } catch (error) {
+        logger.warn(
+          'RULE_SELECTION',
+          `Failed to create default rule "${name}"`,
+          { chainId, actionType },
+          toError(error),
+        );
+      }
+    }
+    return created;
+  }, [actionType, chainId, ruleType]);
+
+  const fetchRules = useCallback(async () => {
+    try {
+      const allRules = await exceptionRuleManager.getAllRules();
+      const applicable = allRules.filter(
+        (rule) => isAvailableToChain(rule) && rule.type === ruleType,
+      );
+      return applicable.length > 0 ? applicable : createDefaultRules();
+    } catch (error) {
+      logger.error(
+        'RULE_SELECTION',
+        '获取规则失败',
+        { chainId, actionType },
+        toError(error),
+      );
+      return createDefaultRules();
+    }
+  }, [actionType, chainId, createDefaultRules, isAvailableToChain, ruleType]);
+
+  const loadRules = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setRules(await fetchRules());
+    } catch (error) {
+      setError(
+        getSafeErrorDetailFromUnknown(error, language) ??
+          t('ruleManager.useRuleManagerData.failedToLoadRules'),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchRules, language, t]);
+
+  const addRule = useCallback(
+    (rule: ExceptionRule) => {
+      if (!isAvailableToChain(rule)) return;
+      setRules((current) => [...current, rule]);
+    },
+    [isAvailableToChain],
+  );
+
+  return { rules, loading, error, setError, loadRules, addRule };
+}

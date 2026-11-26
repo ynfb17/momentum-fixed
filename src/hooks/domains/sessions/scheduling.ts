@@ -1,0 +1,140 @@
+import { type Translator } from '../../../i18n';
+import type { Dispatch, SetStateAction } from 'react';
+import type { AppState, ScheduledSession } from '../../../types';
+import type { MomentumStorage } from '../../../storage/MomentumStorage';
+import type { SafelySaveChains } from '../useChainsDomain';
+import { resolveAppStateReader } from '../appStateAccess';
+import { logger } from '../../../utils/logger';
+import { toast } from '../../../utils/toast';
+import { toError } from '../../../utils/errorMessage';
+import { isSessionExpired } from '../../../domain/scheduling';
+import { notifyTaskCompleted } from './sessionNotifications';
+
+interface CreateSchedulingHandlersParams {
+  state?: AppState;
+  getState?: () => AppState;
+  setState: Dispatch<SetStateAction<AppState>>;
+  storage: MomentumStorage;
+  safelySaveChains: SafelySaveChains;
+  setShowAuxiliaryJudgment: (chainId: string | null) => void;
+  t: Translator;
+}
+
+export function createSchedulingHandlers({
+  state,
+  getState,
+  setState,
+  storage,
+  safelySaveChains,
+  setShowAuxiliaryJudgment,
+  t,
+}: CreateSchedulingHandlersParams) {
+  const readState = resolveAppStateReader({ state, getState });
+  const pendingSchedules = new Set<string>();
+  const handleScheduleChain = (chainId: string) => {
+    const currentState = readState();
+    const existingSchedule = currentState.scheduledSessions.find(
+      (s) => s.chainId === chainId,
+    );
+    if (existingSchedule || pendingSchedules.has(chainId)) return;
+
+    const chain = currentState.chains.find((c) => c.id === chainId);
+    if (!chain) return;
+
+    const scheduledSession: ScheduledSession = {
+      chainId,
+      scheduledAt: new Date(),
+      expiresAt: new Date(Date.now() + chain.auxiliaryDuration * 60 * 1000),
+      auxiliarySignal: chain.auxiliarySignal,
+    };
+
+    const updateStateAndSave = async () => {
+      try {
+        const latestState = readState();
+        const updatedSessions = [
+          ...latestState.scheduledSessions,
+          scheduledSession,
+        ];
+
+        await storage.setScheduledSession(scheduledSession);
+
+        setState((prev) => ({
+          ...prev,
+          scheduledSessions: updatedSessions,
+        }));
+      } catch (error) {
+        logger.error(
+          'SESSIONS',
+          'Failed to schedule chain',
+          { chainId },
+          toError(error),
+        );
+        toast.error(t('sessions.scheduling.failedToSchedulePleaseTryAgain'));
+      } finally {
+        pendingSchedules.delete(chainId);
+      }
+    };
+
+    pendingSchedules.add(chainId);
+    return updateStateAndSave();
+  };
+
+  const handleCancelScheduledSession = (chainId: string) => {
+    setShowAuxiliaryJudgment(chainId);
+  };
+
+  const handleCompleteBooking = async (chainId: string) => {
+    const currentState = readState();
+    const chain = currentState.chains.find((c) => c.id === chainId);
+    const schedule = currentState.scheduledSessions.find(
+      (session) => session.chainId === chainId,
+    );
+    if (!chain || !schedule || pendingSchedules.has(chainId)) return;
+    if (isSessionExpired(schedule.expiresAt)) {
+      setShowAuxiliaryJudgment(chainId);
+      return;
+    }
+
+    const updatedScheduledSessions = currentState.scheduledSessions.filter(
+      (session) => session.chainId !== chainId,
+    );
+    const updatedChains = currentState.chains.map((c) =>
+      c.id === chainId ? { ...c, auxiliaryStreak: c.auxiliaryStreak + 1 } : c,
+    );
+
+    pendingSchedules.add(chainId);
+    try {
+      await safelySaveChains(updatedChains);
+      await storage.removeScheduledSession(chainId);
+      setState((prev) => ({
+        ...prev,
+        scheduledSessions: updatedScheduledSessions,
+        chains: updatedChains,
+      }));
+
+      notifyTaskCompleted(
+        chain.name,
+        chain.auxiliaryStreak + 1,
+        t('sessions.scheduling.scheduleCompleted'),
+      );
+    } catch (error) {
+      logger.error(
+        'SESSIONS',
+        'Failed to complete booking',
+        { chainId },
+        toError(error),
+      );
+      toast.error(
+        t('sessions.scheduling.failedToCompleteBookingPleaseTryAgain'),
+      );
+    } finally {
+      pendingSchedules.delete(chainId);
+    }
+  };
+
+  return {
+    handleScheduleChain,
+    handleCancelScheduledSession,
+    handleCompleteBooking,
+  };
+}

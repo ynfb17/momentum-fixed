@@ -1,0 +1,96 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.env
+.env.local*
+
+# Local Netlify folder
+.netlify
+
+src/**/*.backup
+src/**/temp_fix.txt
+
+# Local tooling artifacts
+.lighthouse/
+stats.html
+lighthouse-report.report.*
+vitest-results*.json
+ui-fixes-results.json
+chaineditor-results.json
+rs.json
+devserver*.err
+knip-report.json
+
+# Coverage outputs
+coverage/
+
+# Quality report outputs
+reports/quality/
+reports/mutation/
+reports/jscpd/
+reports/main-lint-temp.json
+reports/sonar-temp.json
+
+# Lighthouse / DevTools traces (baseline & repro artifacts; keep repo clean)
+reports/lighthouse/
+reports/devtools/
+
+# Mutation tool temp workspace
+.stryker-tmp/
+
+# Local editor / AI tool folders
+.obsidian/
+.VSCodeCounter/
+.serena/
+.claude/
+.augment/
+%SystemDrive%/
+
+# Local backups / scratch
+archive/
+nul
+
+# Manim generated files
+manim/media/
+manim/__pycache__/
+manim/*.jpg
+manim/*.png
+manim/*.mp4
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+src-tauri/.tauri-private.key
+src-tauri/.tauri-private.key.pub
+
+# Browser journey test artifacts
+/playwright-report/
+/test-results/
+
+# Local MCP configuration can contain account access tokens.
+.mcp.json
+
+# Supabase CLI local state
+supabase/.temp/

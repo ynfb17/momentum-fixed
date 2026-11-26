@@ -1,0 +1,40 @@
+import { z } from 'zod';
+
+export const rsipNodeRowSchema = z.object({
+  id: z.string(),
+  parent_id: z.string().nullable(),
+  title: z.string(),
+  rule: z.string(),
+  sort_order: z.number(),
+  created_at: z.string().nullable(),
+  use_timer: z.boolean().nullable().optional(),
+  timer_minutes: z.number().nullable().optional(),
+  emoji: z.string().nullable().optional(),
+  type: z.string().nullable().optional(),
+  group_id: z.string().nullable().optional(),
+  reinforcement_level: z.number().nullable().optional(),
+  max_reinforcement_level: z.number().nullable().optional(),
+  cumulative_execution_days: z.number().nullable().optional(),
+  is_passive: z.boolean().nullable().optional(),
+  split_from_goal: z.string().nullable().optional(),
+  stability_phase: z.string().nullable().optional(),
+  phase_started_at: z.string().nullable(),
+  last_executed_at: z.string().nullable(),
+  last_violated_at: z.string().nullable(),
+  consecutive_executions: z.number().nullable().optional(),
+  consecutive_violations: z.number().nullable().optional(),
+  total_executions: z.number().nullable().optional(),
+  total_violations: z.number().nullable().optional(),
+  user_id: z.string(),
+});
+
+export const rsipMetaRowSchema = z.object({
+  user_id: z.string(),
+  last_added_at: z.string().nullable(),
+  allow_multiple_per_day: z.boolean(),
+  last_tree_opened_at: z.string().nullable().optional(),
+  daily_tree_open_required: z.boolean().nullable().optional(),
+  tree_open_streak: z.number().nullable().optional(),
+  current_run_number: z.number().nullable().optional(),
+  current_run_started_at: z.string().nullable().optional(),
+});

@@ -1,0 +1,287 @@
+import { translate } from '../../../i18n/translate';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { RSIPNode, RSIPTaskLink } from '../../../types';
+import { logger } from '../../../utils/logger';
+import type { RSIPViewProps } from '../../RSIPView.types';
+import { calculateConstraintPower as calculateConstraintPowerRule } from '../../../domain/rsip';
+import {
+  assessViolationGroup,
+  getViolationDescendants,
+} from '../../../hooks/domains/rsip/viewInteractionRules';
+import type {
+  RSIPViewActionSlice,
+  RSIPViewStateSlice,
+  UseRSIPViewInteractionActionsParams,
+} from './useRSIPViewModel.types';
+
+function confirmLinkedTaskAction(params: {
+  automation: RSIPTaskLink['automation'];
+  language: string;
+  targetChainName: string;
+}) {
+  if (params.automation === 'auto') {
+    return true;
+  }
+
+  return window.confirm(
+    translate(
+      params.language.startsWith('zh') ? 'zh' : 'en',
+      'rsip.interaction.confirmLinkedTask',
+      { targetChainName: params.targetChainName },
+    ),
+  );
+}
+
+async function executeLinkedTaskEffect(params: {
+  link: RSIPTaskLink;
+  onStartChain?: RSIPViewProps['onStartChain'];
+  onScheduleChain?: RSIPViewProps['onScheduleChain'];
+}) {
+  if (params.link.effect === 'prompt_start_chain' && params.onStartChain) {
+    await params.onStartChain(params.link.chainId);
+    return;
+  }
+
+  if (
+    params.link.effect === 'prompt_schedule_chain' &&
+    params.onScheduleChain
+  ) {
+    params.onScheduleChain(params.link.chainId);
+  }
+}
+
+async function runLinkedTaskActions(params: {
+  linkedActions: RSIPTaskLink[];
+  chains: RSIPViewStateSlice['chains'];
+  language: string;
+  onStartChain?: RSIPViewProps['onStartChain'];
+  onScheduleChain?: RSIPViewProps['onScheduleChain'];
+}) {
+  for (const link of params.linkedActions) {
+    const targetChain = params.chains.find(
+      (chain) => chain.id === link.chainId,
+    );
+    if (!targetChain) {
+      logger.warn('RSIP', 'RSIP->task link skipped: missing target chain', {
+        linkId: link.id,
+        chainId: link.chainId,
+      });
+      continue;
+    }
+
+    if (
+      !confirmLinkedTaskAction({
+        automation: link.automation,
+        language: params.language,
+        targetChainName: targetChain.name,
+      })
+    ) {
+      continue;
+    }
+
+    await executeLinkedTaskEffect({
+      link,
+      onStartChain: params.onStartChain,
+      onScheduleChain: params.onScheduleChain,
+    });
+  }
+}
+
+export function useRSIPViewInteractionActions({
+  state,
+  props,
+}: UseRSIPViewInteractionActionsParams): Pick<
+  RSIPViewActionSlice,
+  | 'handleMarkExecuted'
+  | 'handleTaskLinkUpsert'
+  | 'handleRestoreFromLibrary'
+  | 'calculateConstraintPower'
+  | 'openViolationDialog'
+  | 'violationDialogNode'
+  | 'violationDescendants'
+  | 'violationGroupMessage'
+  | 'handleConfirmViolation'
+  | 'closeViolationDialog'
+  | 'onSaveNodes'
+  | 'onReinforceNode'
+> {
+  const { language, nodes, groups, chains } = state;
+  const {
+    onSaveNodes,
+    onMarkExecuted,
+    onMarkViolated,
+    onReinforceNode,
+    onRestoreFromLibrary,
+    onUpsertTaskLinks,
+    onGetTaskActions,
+    onStartChain,
+    onScheduleChain,
+  } = props;
+
+  const [violationDialogNode, setViolationDialogNode] =
+    useState<RSIPNode | null>(null);
+  const [violationGroupMessage, setViolationGroupMessage] = useState<string>();
+  const executionPendingIdsRef = useRef(new Set<string>());
+  const executionQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const latestNodesRef = useRef(nodes);
+  const violationSaveInFlightRef = useRef(false);
+  const violationAttemptIdRef = useRef(0);
+
+  useEffect(() => {
+    latestNodesRef.current = nodes;
+  }, [nodes]);
+
+  const handleMarkExecuted = useCallback(
+    (nodeId: string, reinforce = false) => {
+      if (executionPendingIdsRef.current.has(nodeId)) {
+        return Promise.resolve(latestNodesRef.current);
+      }
+      executionPendingIdsRef.current.add(nodeId);
+
+      const execution = executionQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          const currentNodes = latestNodesRef.current;
+          const updatedNodes = await onMarkExecuted(
+            nodeId,
+            currentNodes,
+            undefined,
+            { reinforce },
+          );
+          latestNodesRef.current = updatedNodes;
+          const linkedActions = onGetTaskActions(nodeId);
+          await runLinkedTaskActions({
+            linkedActions,
+            chains,
+            language,
+            onStartChain,
+            onScheduleChain,
+          });
+
+          return updatedNodes;
+        })
+        .finally(() => {
+          executionPendingIdsRef.current.delete(nodeId);
+        });
+      executionQueueRef.current = execution.then(
+        () => undefined,
+        () => undefined,
+      );
+      return execution;
+    },
+    [
+      chains,
+      language,
+      onGetTaskActions,
+      onMarkExecuted,
+      onScheduleChain,
+      onStartChain,
+    ],
+  );
+
+  const openViolationDialog = useCallback(
+    (node: RSIPNode) => {
+      violationAttemptIdRef.current += 1;
+      setViolationDialogNode(node);
+      const assessment = assessViolationGroup(node, groups, nodes);
+      if (assessment.status === 'none') {
+        setViolationGroupMessage(undefined);
+        return;
+      }
+      if (assessment.status === 'tolerated') {
+        setViolationGroupMessage(
+          translate(
+            language.startsWith('zh') ? 'zh' : 'en',
+            'rsip.interaction.toleranceRemaining',
+            { groupTitle: assessment.groupTitle },
+          ),
+        );
+      } else {
+        setViolationGroupMessage(
+          translate(
+            language.startsWith('zh') ? 'zh' : 'en',
+            'rsip.interaction.toleranceExhausted',
+            { groupTitle: assessment.groupTitle },
+          ),
+        );
+      }
+    },
+    [groups, language, nodes],
+  );
+
+  const closeViolationDialog = useCallback(() => {
+    violationAttemptIdRef.current += 1;
+    setViolationDialogNode(null);
+    setViolationGroupMessage(undefined);
+  }, []);
+
+  const handleConfirmViolation = useCallback(
+    async (payload: { reasonCode?: string; repairHint?: string }) => {
+      if (!violationDialogNode) {
+        return;
+      }
+      if (violationSaveInFlightRef.current) {
+        return;
+      }
+
+      const attemptId = violationAttemptIdRef.current;
+      violationSaveInFlightRef.current = true;
+      try {
+        await onMarkViolated(violationDialogNode.id, nodes, undefined, {
+          reasonCode: payload.reasonCode,
+          repairHint: payload.repairHint,
+          collapseReason: payload.reasonCode,
+        });
+
+        if (attemptId === violationAttemptIdRef.current) {
+          closeViolationDialog();
+        }
+      } finally {
+        violationSaveInFlightRef.current = false;
+      }
+    },
+    [closeViolationDialog, nodes, onMarkViolated, violationDialogNode],
+  );
+
+  const handleRestoreFromLibrary = useCallback(
+    async (entryId: string, parentId?: string) => {
+      await onRestoreFromLibrary(entryId, parentId);
+    },
+    [onRestoreFromLibrary],
+  );
+
+  const handleTaskLinkUpsert = useCallback(
+    async (nextLinks: RSIPTaskLink[]) => {
+      await onUpsertTaskLinks(nextLinks);
+    },
+    [onUpsertTaskLinks],
+  );
+
+  const calculateConstraintPower = useCallback(
+    (nodeId: string) => calculateConstraintPowerRule(nodes, nodeId),
+    [nodes],
+  );
+
+  const violationDescendants = useMemo(() => {
+    if (!violationDialogNode) {
+      return [];
+    }
+
+    return getViolationDescendants(nodes, violationDialogNode.id);
+  }, [nodes, violationDialogNode]);
+
+  return {
+    handleMarkExecuted,
+    handleTaskLinkUpsert,
+    handleRestoreFromLibrary,
+    calculateConstraintPower,
+    openViolationDialog,
+    violationDialogNode,
+    violationDescendants,
+    violationGroupMessage,
+    handleConfirmViolation,
+    closeViolationDialog,
+    onSaveNodes,
+    onReinforceNode,
+  };
+}
