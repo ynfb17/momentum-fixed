@@ -9,6 +9,8 @@
 > (2026-11-25). Modifications by **Han Bao (@ynfb17)** on 2026-11-26; see
 > [ATTRIBUTION.md](ATTRIBUTION.md). This modified version is distributed under
 > GPL-3.0.
+>
+> Live example (personal deployment): <https://momentum-fix-20261126.surge.sh>
 
 For development and verification, see [CONTRIBUTING.md](CONTRIBUTING.md); see the [documentation index](docs/README.md) for architecture and domain behavior.
 
