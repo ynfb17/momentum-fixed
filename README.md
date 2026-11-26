@@ -14,6 +14,8 @@
 > This is a modified copy of [KenXiao1/momentum](https://github.com/KenXiao1/momentum),
 > originally GPL-3.0. Modifications by Han Bao (@ynfb17), 2026-11-26; see
 > [ATTRIBUTION.md](ATTRIBUTION.md).
+>
+> 本修改版在线示例（个人部署）：<https://momentum-fix-20261126.surge.sh>
 
 开发与验证流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，架构和领域说明见 [文档索引](docs/README.md)。
 
